@@ -9,7 +9,11 @@ use crossterm::{
 };
 use ratatui::{prelude::*, style::palette::tailwind, widgets::*};
 use serde::{Deserialize, Serialize};
-use std::{error::Error, io, io::stdout};
+use std::{
+    error::Error,
+    io::{self, stdout},
+    vec,
+};
 use uuid::Uuid;
 
 const TODO_HEADER_BG: Color = tailwind::BLUE.c950;
@@ -24,7 +28,7 @@ struct StatefulList<T> {
     last_selected: Option<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum SelectedLayout {
     Sitzungen,
     Tops,
@@ -54,6 +58,12 @@ struct Antrag {
     antragstext: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Param {
+    titel: String,
+    text: String,
+}
+
 fn get_sitzungen() -> Vec<Sitzung> {
     let endoint = "api/topmanager/sitzungen/";
     let reqwest = reqwest::blocking::Client::new();
@@ -67,6 +77,9 @@ struct App {
     tops_selected_sitzung: StatefulList<Top>,
     anträge_selected_top: StatefulList<Antrag>,
     layout: SelectedLayout,
+    currently_editing: Option<SelectedLayout>,
+    edit_buffer: StatefulList<Param>,
+    currently_creating: Option<SelectedLayout>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -116,6 +129,9 @@ impl<'a> App {
             tops_selected_sitzung: StatefulList::with_items(vec![]),
             anträge_selected_top: StatefulList::with_items(vec![]),
             layout: SelectedLayout::Sitzungen,
+            currently_editing: None,
+            currently_creating: None,
+            edit_buffer: StatefulList::with_items(vec![]),
         }
     }
 
@@ -131,6 +147,18 @@ impl<'a> App {
         self.layout = SelectedLayout::Tops;
     }
 
+    fn create_sitzung(&mut self) {
+        self.edit_buffer.items.push(Param {
+            titel: "Datum".to_string(),
+            text: "".to_string(),
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Name".to_string(),
+            text: "".to_string(),
+        });
+        self.currently_creating = Some(SelectedLayout::Sitzungen);
+    }
+
     fn open_top(&mut self) {
         let selected = self.tops_selected_sitzung.state.selected().unwrap();
         let top = self.tops_selected_sitzung.items[selected].clone();
@@ -143,6 +171,94 @@ impl<'a> App {
         self.layout = SelectedLayout::Anträge;
     }
 
+    fn create_top(&mut self) {
+        self.edit_buffer.items.push(Param {
+            titel: "Name".to_string(),
+            text: "".to_string(),
+        });
+        self.currently_creating = Some(SelectedLayout::Tops);
+    }
+
+    fn edit_antag(&mut self) {
+        let selected = self.anträge_selected_top.state.selected().unwrap();
+        let antrag = self.anträge_selected_top.items[selected].clone();
+        let url = format!("{}api/topmanager/antrag/{}/", URL, antrag.id);
+        let reqwest = reqwest::blocking::Client::new();
+        let response = reqwest.get(url).send().unwrap();
+        let antrag: Antrag = response.json().unwrap();
+        self.edit_buffer.items.push(Param {
+            titel: "Titel".to_string(),
+            text: antrag.titel,
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Begründung".to_string(),
+            text: antrag.begründung,
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Antragstext".to_string(),
+            text: antrag.antragstext,
+        });
+
+        self.currently_editing = Some(SelectedLayout::Anträge);
+    }
+
+    fn edit_sitzung(&mut self) {
+        let selected = self.sitzungen.state.selected().unwrap();
+        let sitzung = self.sitzungen.items[selected].clone();
+        let url = format!("{}api/topmanager/sitzung/{}/", URL, sitzung.id);
+        let reqwest = reqwest::blocking::Client::new();
+        let response = reqwest.get(url).send().unwrap();
+        let sitzung: Sitzung = response.json().unwrap();
+        self.edit_buffer.items.push(Param {
+            titel: "Datum".to_string(),
+            text: sitzung.datum.to_string(),
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Name".to_string(),
+            text: sitzung.name,
+        });
+        self.currently_editing = Some(SelectedLayout::Sitzungen);
+    }
+
+    fn edit_top(&mut self) {
+        let selected = self.tops_selected_sitzung.state.selected().unwrap();
+        let top = self.tops_selected_sitzung.items[selected].clone();
+        let url = format!("{}api/topmanager/tops/{}/", URL, top.id);
+        let reqwest = reqwest::blocking::Client::new();
+        let response = reqwest.get(url).send().unwrap();
+        let top: Top = response.json().unwrap();
+        self.edit_buffer.items.push(Param {
+            titel: "Name".to_string(),
+            text: top.name,
+        });
+        self.currently_editing = Some(SelectedLayout::Tops);
+    }
+
+    fn create_antrag(&mut self) {
+        self.edit_buffer.items.push(Param {
+            titel: "Titel".to_string(),
+            text: "".to_string(),
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Begründung".to_string(),
+            text: "".to_string(),
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Antragstext".to_string(),
+            text: "".to_string(),
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Antragssteller".to_string(),
+            text: "".to_string(),
+        });
+        self.currently_creating = Some(SelectedLayout::Anträge);
+    }
+
+    fn edit_value(&mut self) {
+        let selected = self.edit_buffer.state.selected().unwrap();
+        let param = self.edit_buffer.items[selected].clone();
+    }
+
     fn exit_app(&self) {
         std::process::exit(0);
     }
@@ -153,7 +269,29 @@ impl App {
         loop {
             self.draw(&mut terminal)?;
 
-            if let SelectedLayout::Sitzungen = self.layout {
+            if self.currently_editing.is_some() {
+                if let Some(SelectedLayout::Sitzungen) = self.currently_editing {
+                    //edit sitzung
+                    self.handle_edit(&mut terminal)?;
+                } else if let Some(SelectedLayout::Tops) = self.currently_editing {
+                    //edit top
+                    self.handle_edit(&mut terminal)?;
+                } else if let Some(SelectedLayout::Anträge) = self.currently_editing {
+                    //edit antrag
+                    self.handle_edit(&mut terminal)?;
+                }
+            } else if self.currently_creating.is_some() {
+                if let Some(SelectedLayout::Sitzungen) = self.currently_creating {
+                    //edit sitzung
+                    self.handle_edit(&mut terminal)?;
+                } else if let Some(SelectedLayout::Tops) = self.currently_creating {
+                    //edit top
+                    self.handle_edit(&mut terminal)?;
+                } else if let Some(SelectedLayout::Anträge) = self.currently_creating {
+                    //edit antrag
+                    self.handle_edit(&mut terminal)?;
+                }
+            } else if let SelectedLayout::Sitzungen = self.layout {
                 self.handle_sitzungen(&mut terminal)?;
             } else if let SelectedLayout::Tops = self.layout {
                 self.handle_tops(&mut terminal)?;
@@ -168,6 +306,23 @@ impl App {
         Ok(())
     }
 
+    fn handle_edit(&mut self, terminal: &mut Terminal<impl Backend>) -> io::Result<()> {
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                use KeyCode::*;
+                match key.code {
+                    Char('q') | Esc => self.exit_edit(),
+                    Char('h') | Left => self.edit_buffer.unselect(),
+                    Char('j') | Down => self.edit_buffer.next(),
+                    Char('k') | Up => self.edit_buffer.previous(),
+                    Char('e') => self.edit_value(),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn handle_sitzungen(&mut self, terminal: &mut Terminal<impl Backend>) -> io::Result<()> {
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
@@ -178,6 +333,8 @@ impl App {
                     Char('j') | Down => self.sitzungen.next(),
                     Char('k') | Up => self.sitzungen.previous(),
                     Char('o') => self.open_sitzung(),
+                    Char('e') => self.edit_sitzung(),
+                    Char('p') => self.create_sitzung(),
                     _ => {}
                 }
             }
@@ -195,6 +352,8 @@ impl App {
                     Char('j') | Down => self.tops_selected_sitzung.next(),
                     Char('k') | Up => self.tops_selected_sitzung.previous(),
                     Char('o') => self.open_top(),
+                    Char('e') => self.edit_top(),
+                    Char('p') => self.create_top(),
                     _ => {}
                 }
             }
@@ -211,6 +370,8 @@ impl App {
                     Char('h') | Left => self.anträge_selected_top.unselect(),
                     Char('j') | Down => self.anträge_selected_top.next(),
                     Char('k') | Up => self.anträge_selected_top.previous(),
+                    Char('e') => self.edit_antag(),
+                    Char('p') => self.create_antrag(),
                     _ => {}
                 }
             }
@@ -219,7 +380,17 @@ impl App {
     }
 
     fn switch_layout(&mut self, layout: SelectedLayout) {
-        self.layout = layout;
+        self.layout = layout.clone();
+    }
+
+    fn exit_edit(&mut self) {
+        self.edit_buffer = StatefulList::with_items(vec![]);
+        if let Some(editing) = &self.currently_editing {
+            self.currently_editing = None;
+        }
+        if let Some(creating) = &self.currently_creating {
+            self.currently_creating = None;
+        }
     }
 }
 
@@ -233,26 +404,24 @@ impl Widget for &mut App {
         let [header_area, rest_area, footer_area] = vertical.areas(area);
 
         render_title(header_area, buf);
-        if let SelectedLayout::Sitzungen = self.layout {
-            self.render_overview_sitzungen(rest_area, buf);
-        } else if let SelectedLayout::Tops = self.layout {
-            self.render_overview_tops(rest_area, buf);
+        if let Some(editing) = &self.currently_editing {
+            self.render_edit(rest_area, buf);
+        } else if let Some(creating) = &self.currently_creating {
+            self.render_edit(rest_area, buf);
         } else {
-            self.render_anträge(rest_area, buf);
+            self.render_overview(rest_area, buf);
         }
         render_footer(footer_area, buf);
     }
 }
 
 impl App {
-    fn render_overview(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        title: String,
-        items: Vec<String>,
-        state: &mut ListState,
-    ) {
+    fn render_overview(&mut self, area: Rect, buf: &mut Buffer) {
+        let title = match self.layout {
+            SelectedLayout::Sitzungen => "Sitzungen",
+            SelectedLayout::Tops => "Tops",
+            SelectedLayout::Anträge => "Anträge",
+        };
         let outer_block = Block::default()
             .borders(Borders::NONE)
             .fg(TEXT_COLOR)
@@ -268,7 +437,31 @@ impl App {
         let inner_area = outer_block.inner(outer_area);
 
         outer_block.render(outer_area, buf);
-        let items = List::new(items)
+
+        let mut listelement: Vec<String> = vec![];
+        if let SelectedLayout::Sitzungen = self.layout {
+            listelement = self
+                .sitzungen
+                .items
+                .iter()
+                .map(|s| s.name.clone())
+                .collect();
+        } else if let SelectedLayout::Tops = self.layout {
+            listelement = self
+                .tops_selected_sitzung
+                .items
+                .iter()
+                .map(|t| t.name.clone())
+                .collect();
+        } else {
+            listelement = self
+                .anträge_selected_top
+                .items
+                .iter()
+                .map(|a| a.titel.clone())
+                .collect();
+        }
+        let items = List::new(listelement)
             .block(inner_block)
             .highlight_style(
                 Style::default()
@@ -279,124 +472,126 @@ impl App {
             .highlight_symbol(">")
             .highlight_spacing(HighlightSpacing::Always);
 
-        StatefulWidget::render(items, inner_area, buf, state);
+        if let SelectedLayout::Sitzungen = self.layout {
+            StatefulWidget::render(items, inner_area, buf, &mut self.sitzungen.state);
+        } else if let SelectedLayout::Tops = self.layout {
+            StatefulWidget::render(
+                items,
+                inner_area,
+                buf,
+                &mut self.tops_selected_sitzung.state,
+            );
+        } else {
+            StatefulWidget::render(items, inner_area, buf, &mut self.anträge_selected_top.state);
+        }
     }
-    fn render_overview_sitzungen(&mut self, area: Rect, buf: &mut Buffer) {
-        let outer_block = Block::default()
-            .borders(Borders::NONE)
-            .fg(TEXT_COLOR)
-            .bg(TODO_HEADER_BG)
-            .title("TODO List")
-            .title_alignment(Alignment::Center);
-        let inner_block = Block::default()
-            .borders(Borders::NONE)
-            .fg(TEXT_COLOR)
-            .bg(NORMAL_ROW_COLOR);
+    fn render_edit(&mut self, area: Rect, buf: &mut Buffer) {
+        if let Some(editing) = &self.currently_editing {
+            let title = match editing {
+                SelectedLayout::Sitzungen => "Edit Sitzung",
+                SelectedLayout::Tops => "Edit Top",
+                SelectedLayout::Anträge => "Edit Antrag",
+            };
+            let outer_block = Block::default()
+                .borders(Borders::NONE)
+                .fg(TEXT_COLOR)
+                .bg(TODO_HEADER_BG)
+                .title(title)
+                .title_alignment(Alignment::Center);
+            let inner_block = Block::default()
+                .borders(Borders::NONE)
+                .fg(TEXT_COLOR)
+                .bg(NORMAL_ROW_COLOR);
 
-        let outer_area = area;
-        let inner_area = outer_block.inner(outer_area);
+            let outer_area = area;
+            let inner_area = outer_block.inner(outer_area);
 
-        outer_block.render(outer_area, buf);
+            outer_block.render(outer_area, buf);
 
-        let sitzungen = self.sitzungen.items.iter().map(|sitzung| {
-            let text = format!("{} {}", sitzung.name, sitzung.datum);
-            ListItem::new(text)
-        });
+            let mut listelement: Vec<String> = vec![];
+            listelement = self
+                .edit_buffer
+                .items
+                .iter()
+                .map(|p| format!("{}: {}", p.titel, p.text))
+                .collect();
 
-        let items = List::new(sitzungen)
-            .block(inner_block)
-            .highlight_style(
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::REVERSED)
-                    .fg(SELECTED_STYLE_FG),
-            )
-            .highlight_symbol(">")
-            .highlight_spacing(HighlightSpacing::Always);
+            let items = List::new(listelement)
+                .block(inner_block)
+                .highlight_style(
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::REVERSED)
+                        .fg(SELECTED_STYLE_FG),
+                )
+                .highlight_symbol(">")
+                .highlight_spacing(HighlightSpacing::Always);
+            StatefulWidget::render(items, inner_area, buf, &mut self.edit_buffer.state);
+        }
 
-        StatefulWidget::render(items, inner_area, buf, &mut self.sitzungen.state);
+        if let Some(editing) = &self.currently_creating {
+            let title = match editing {
+                SelectedLayout::Sitzungen => "Create Sitzung",
+                SelectedLayout::Tops => "Create Top",
+                SelectedLayout::Anträge => "Create Antrag",
+            };
+            let outer_block = Block::default()
+                .borders(Borders::NONE)
+                .fg(TEXT_COLOR)
+                .bg(TODO_HEADER_BG)
+                .title(title)
+                .title_alignment(Alignment::Center);
+            let inner_block = Block::default()
+                .borders(Borders::NONE)
+                .fg(TEXT_COLOR)
+                .bg(NORMAL_ROW_COLOR);
+
+            let outer_area = area;
+            let inner_area = outer_block.inner(outer_area);
+
+            outer_block.render(outer_area, buf);
+
+            let mut listelement: Vec<String> = vec![];
+            listelement = self
+                .edit_buffer
+                .items
+                .iter()
+                .map(|p| format!("{}: {}", p.titel, p.text))
+                .collect();
+
+            let items = List::new(listelement)
+                .block(inner_block)
+                .highlight_style(
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::REVERSED)
+                        .fg(SELECTED_STYLE_FG),
+                )
+                .highlight_symbol(">")
+                .highlight_spacing(HighlightSpacing::Always);
+            StatefulWidget::render(items, inner_area, buf, &mut self.edit_buffer.state);
+        }
     }
+}
 
-    fn render_overview_tops(&mut self, area: Rect, buf: &mut Buffer) {
-        // We create two blocks, one is for the header (outer) and the other is for list (inner).
-        let outer_block = Block::default()
-            .borders(Borders::NONE)
-            .fg(TEXT_COLOR)
-            .bg(TODO_HEADER_BG)
-            .title("TODO List")
-            .title_alignment(Alignment::Center);
-        let inner_block = Block::default()
-            .borders(Borders::NONE)
-            .fg(TEXT_COLOR)
-            .bg(NORMAL_ROW_COLOR);
-        // We get the inner area from outer_block. We'll use this area later to render the table.
-        let outer_area = area;
-        let inner_area = outer_block.inner(outer_area);
-        // We can render the header in outer_area.
-        outer_block.render(outer_area, buf);
-        let tops = self.tops_selected_sitzung.items.iter().map(|top| {
-            let text = format!("{} {}", top.weight as i32, top.name);
-            ListItem::new(text)
-        });
-        // Create a List from all list items and highlight the currently selected one
-        let items = List::new(tops)
-            .block(inner_block)
-            .highlight_style(
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::REVERSED)
-                    .fg(SELECTED_STYLE_FG),
-            )
-            .highlight_symbol(">")
-            .highlight_spacing(HighlightSpacing::Always);
-        // We can now render the item list
-        // (look careful we are using StatefulWidget's render.)
-        // ratatui::widgets::StatefulWidget::render as stateful_render
-        StatefulWidget::render(
-            items,
-            inner_area,
-            buf,
-            &mut self.tops_selected_sitzung.state,
-        );
-    }
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
 
-    fn render_anträge(&mut self, area: Rect, buf: &mut Buffer) {
-        // We create two blocks, one is for the header (outer) and the other is for list (inner).
-        let outer_block = Block::default()
-            .borders(Borders::NONE)
-            .fg(TEXT_COLOR)
-            .bg(TODO_HEADER_BG)
-            .title("TODO List")
-            .title_alignment(Alignment::Center);
-        let inner_block = Block::default()
-            .borders(Borders::NONE)
-            .fg(TEXT_COLOR)
-            .bg(NORMAL_ROW_COLOR);
-        // We get the inner area from outer_block. We'll use this area later to render the table.
-        let outer_area = area;
-        let inner_area = outer_block.inner(outer_area);
-        // We can render the header in outer_area.
-        outer_block.render(outer_area, buf);
-        let anträge = self.anträge_selected_top.items.iter().map(|antrag| {
-            let text = format!("{} {}", antrag.titel, antrag.begründung);
-            ListItem::new(text)
-        });
-        // Create a List from all list items and highlight the currently selected one
-        let items = List::new(anträge)
-            .block(inner_block)
-            .highlight_style(
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::REVERSED)
-                    .fg(SELECTED_STYLE_FG),
-            )
-            .highlight_symbol(">")
-            .highlight_spacing(HighlightSpacing::Always);
-        // We can now render the item list
-        // (look careful we are using StatefulWidget's render.)
-        // ratatui::widgets::StatefulWidget::render as stateful_render
-        StatefulWidget::render(items, inner_area, buf, &mut self.anträge_selected_top.state);
-    }
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn render_title(area: Rect, buf: &mut Buffer) {
