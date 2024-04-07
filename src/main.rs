@@ -602,7 +602,7 @@ fn render_title(area: Rect, buf: &mut Buffer) {
 }
 
 fn render_footer(area: Rect, buf: &mut Buffer) {
-    Paragraph::new("\nUse ↓↑ to move, ← to unselect, → to change status, g/G to go top/bottom.")
+    Paragraph::new("\nUse ↓↑ to move, o to open, p to create a new entry, e to edit and q to exit")
         .centered()
         .render(area, buf);
 }
