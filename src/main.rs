@@ -7,13 +7,16 @@ use crossterm::{
     },
     ExecutableCommand,
 };
+use oauth2::http::header;
 use ratatui::{prelude::*, style::palette::tailwind, widgets::*};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
     io::{self, stdout},
+    time::Duration,
     vec,
 };
+use tui_textarea::TextArea;
 use uuid::Uuid;
 
 const TODO_HEADER_BG: Color = tailwind::BLUE.c950;
@@ -22,6 +25,9 @@ const SELECTED_STYLE_FG: Color = tailwind::BLUE.c300;
 const TEXT_COLOR: Color = tailwind::SLATE.c200;
 const URL: &str = "http://localhost:8080/";
 
+mod keycloak;
+
+#[derive(Debug, Clone)]
 struct StatefulList<T> {
     state: ListState,
     items: Vec<T>,
@@ -35,14 +41,14 @@ enum SelectedLayout {
     Anträge,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct Sitzung {
     name: String,
     datum: NaiveDateTime,
     id: Uuid,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct Top {
     name: String,
     id: Uuid,
@@ -72,7 +78,23 @@ fn get_sitzungen() -> Vec<Sitzung> {
     sitzungen
 }
 
-struct App {
+fn get_tops(sitzung: Sitzung) -> Vec<Top> {
+    let url = format!("{}api/topmanager/sitzung/{}/tops/", URL, sitzung.id);
+    let reqwest = reqwest::blocking::Client::new();
+    let response = reqwest.get(url).send().unwrap();
+    let tops: Vec<Top> = response.json().unwrap();
+    tops
+}
+
+fn get_anträge(top: Top) -> Vec<Antrag> {
+    let url = format!("{}api/topmanager/tops/{}/anträge/", URL, top.id);
+    let reqwest = reqwest::blocking::Client::new();
+    let response = reqwest.get(url).send().unwrap();
+    let anträge: Vec<Antrag> = response.json().unwrap();
+    anträge
+}
+
+struct App<'a> {
     sitzungen: StatefulList<Sitzung>,
     tops_selected_sitzung: StatefulList<Top>,
     anträge_selected_top: StatefulList<Antrag>,
@@ -80,13 +102,19 @@ struct App {
     currently_editing: Option<SelectedLayout>,
     edit_buffer: StatefulList<Param>,
     currently_creating: Option<SelectedLayout>,
+    edit_param_pop: Option<Param>,
+    current_text_area: TextArea<'a>,
+    sitzung: Sitzung,
+    top: Top,
+    token: String,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     init_error_hooks()?;
     let terminal = init_terminal()?;
 
-    App::new().run(terminal)?;
+    App::new().await.run(terminal)?;
 
     restore_terminal()?;
 
@@ -122,8 +150,8 @@ fn restore_terminal() -> color_eyre::Result<()> {
     Ok(())
 }
 
-impl<'a> App {
-    fn new() -> Self {
+impl<'a> App<'_> {
+    async fn new() -> Self {
         Self {
             sitzungen: StatefulList::with_items(get_sitzungen()),
             tops_selected_sitzung: StatefulList::with_items(vec![]),
@@ -132,7 +160,20 @@ impl<'a> App {
             currently_editing: None,
             currently_creating: None,
             edit_buffer: StatefulList::with_items(vec![]),
+            edit_param_pop: None,
+            current_text_area: TextArea::default(),
+            sitzung: Sitzung::default(),
+            top: Top::default(),
+            token: keycloak::get_token().await.unwrap(),
         }
+    }
+
+    fn get_sitzungen(&mut self) {
+        let endoint = "api/topmanager/sitzungen/";
+        let reqwest = reqwest::blocking::Client::new();
+        let response = reqwest.get(URL.to_string() + endoint).send().unwrap();
+        let sitzungen: Vec<Sitzung> = response.json().unwrap();
+        self.sitzungen = StatefulList::with_items(sitzungen);
     }
 
     fn open_sitzung(&mut self) {
@@ -142,6 +183,7 @@ impl<'a> App {
         let reqwest = reqwest::blocking::Client::new();
         let response = reqwest.get(url).send().unwrap();
         let tops: Vec<Top> = response.json().unwrap();
+        self.sitzung = sitzung;
         self.tops_selected_sitzung = StatefulList::with_items(tops);
         //open new view with sitzung
         self.layout = SelectedLayout::Tops;
@@ -159,6 +201,23 @@ impl<'a> App {
         self.currently_creating = Some(SelectedLayout::Sitzungen);
     }
 
+    fn delete_sitzung(&mut self) {
+        let token = self.token.clone();
+        let cookie = format!("access_token={}", token);
+        let selected = self.sitzungen.state.selected().unwrap();
+        let sitzung = self.sitzungen.items[selected].clone();
+        let url = format!("{}api/topmanager/sitzung/", URL);
+        let reqwest = reqwest::blocking::Client::new();
+        let json = serde_json::json!({ "id": sitzung.id });
+        let response = reqwest
+            .delete(url)
+            .header("Cookie", cookie)
+            .json(&json)
+            .send()
+            .unwrap();
+        self.get_sitzungen();
+    }
+
     fn open_top(&mut self) {
         let selected = self.tops_selected_sitzung.state.selected().unwrap();
         let top = self.tops_selected_sitzung.items[selected].clone();
@@ -166,6 +225,7 @@ impl<'a> App {
         let reqwest = reqwest::blocking::Client::new();
         let response = reqwest.get(url).send().unwrap();
         let antrag: Vec<Antrag> = response.json().unwrap();
+        self.top = top;
         //open new view with top
         self.anträge_selected_top = StatefulList::with_items(antrag);
         self.layout = SelectedLayout::Anträge;
@@ -173,10 +233,31 @@ impl<'a> App {
 
     fn create_top(&mut self) {
         self.edit_buffer.items.push(Param {
-            titel: "Name".to_string(),
+            titel: "Titel".to_string(),
+            text: "".to_string(),
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Inhalt".to_string(),
             text: "".to_string(),
         });
         self.currently_creating = Some(SelectedLayout::Tops);
+    }
+
+    fn delete_top(&mut self) {
+        let token = self.token.clone();
+        let cookie = format!("access_token={}", token);
+        let selected = self.tops_selected_sitzung.state.selected().unwrap();
+        let top = self.tops_selected_sitzung.items[selected].clone();
+        let url = format!("{}api/topmanager/top/", URL);
+        let reqwest = reqwest::blocking::Client::new();
+        let json = serde_json::json!({ "id": top.id });
+        let response = reqwest
+            .delete(url)
+            .header("Cookie", cookie)
+            .json(&json)
+            .send()
+            .unwrap();
+        self.tops_selected_sitzung = StatefulList::with_items(get_tops(self.sitzung.clone()));
     }
 
     fn edit_antag(&mut self) {
@@ -228,8 +309,12 @@ impl<'a> App {
         let response = reqwest.get(url).send().unwrap();
         let top: Top = response.json().unwrap();
         self.edit_buffer.items.push(Param {
-            titel: "Name".to_string(),
+            titel: "Titel".to_string(),
             text: top.name,
+        });
+        self.edit_buffer.items.push(Param {
+            titel: "Inhalt".to_string(),
+            text: top.inhalt.to_string(),
         });
         self.currently_editing = Some(SelectedLayout::Tops);
     }
@@ -254,49 +339,179 @@ impl<'a> App {
         self.currently_creating = Some(SelectedLayout::Anträge);
     }
 
+    fn delete_antrag(&mut self) {
+        let token = self.token.clone();
+        let cookie = format!("access_token={}", token);
+        let selected = self.anträge_selected_top.state.selected().unwrap();
+        let antrag = self.anträge_selected_top.items[selected].clone();
+        let url = format!("{}api/topmanager/antrag/{}/", URL, antrag.id);
+        let reqwest = reqwest::blocking::Client::new();
+        let response = reqwest.delete(url).header("Cookie", cookie).send().unwrap();
+        self.anträge_selected_top = StatefulList::with_items(get_anträge(self.top.clone()));
+    }
+
     fn edit_value(&mut self) {
         let selected = self.edit_buffer.state.selected().unwrap();
         let param = self.edit_buffer.items[selected].clone();
+        self.edit_param_pop = Some(param);
     }
 
     fn exit_app(&self) {
         std::process::exit(0);
     }
+
+    fn patch(&mut self) {
+        let token = self.token.clone();
+        let cookie = format!("access_token={}", token);
+
+        if let Some(SelectedLayout::Sitzungen) = self.currently_editing {
+            let sitzung = self.sitzungen.items[self.sitzungen.state.selected().unwrap()].clone();
+            let url = format!("{}api/topmanager/sitzung/", URL);
+            let reqwest = reqwest::blocking::Client::new();
+            let mut data = serde_json::json!({});
+            data["id"] = serde_json::Value::String(sitzung.id.to_string());
+            for param in &self.edit_buffer.items {
+                data[param.titel.clone().to_lowercase()] =
+                    serde_json::Value::String((param.text).to_string());
+            }
+            let response = reqwest
+                .patch(url)
+                .header("Cookie", cookie)
+                .json(&data)
+                .send()
+                .unwrap();
+        } else if let Some(SelectedLayout::Tops) = self.currently_editing {
+            let sitzung = self.sitzungen.items[self.sitzungen.state.selected().unwrap()].clone();
+            let selected = self.tops_selected_sitzung.state.selected().unwrap();
+            let top = self.tops_selected_sitzung.items[selected].clone();
+            let url = format!("{}api/topmanager/top/", URL);
+            let reqwest = reqwest::blocking::Client::new();
+            let mut data = serde_json::json!({});
+            data["id"] = serde_json::Value::String(top.id.to_string());
+            data["sitzung_id"] = serde_json::Value::String(sitzung.id.to_string());
+            for param in &self.edit_buffer.items {
+                data[param.titel.clone().to_lowercase()] =
+                    serde_json::Value::String((param.text).to_string());
+            }
+            let response = reqwest
+                .patch(url)
+                .header("Cookie", cookie)
+                .json(&data)
+                .send()
+                .unwrap();
+        } else if let Some(SelectedLayout::Anträge) = self.currently_editing {
+            let antrag = self.anträge_selected_top.items
+                [self.anträge_selected_top.last_selected.unwrap()]
+            .clone();
+            let url = format!("{}api/topmanager/antrag/", URL);
+            let reqwest = reqwest::blocking::Client::new();
+            let mut data = serde_json::json!({});
+            data["id"] = serde_json::Value::String(antrag.id.to_string());
+            for param in &self.edit_buffer.items {
+                data[param.titel.clone().to_lowercase()] =
+                    serde_json::Value::String((param.text).to_string());
+            }
+            let response = reqwest
+                .patch(url)
+                .header("Cookie", cookie)
+                .json(&data)
+                .send()
+                .unwrap();
+        }
+    }
+
+    fn put(&mut self) {
+        let token = self.token.clone();
+        let cookie = format!("access_token={}", token);
+
+        if let Some(SelectedLayout::Sitzungen) = self.currently_creating {
+            let url = format!("{}api/topmanager/sitzung/", URL);
+            let reqwest = reqwest::blocking::Client::new();
+            let mut data = serde_json::json!({});
+            for param in &self.edit_buffer.items {
+                data[param.titel.clone().to_lowercase()] =
+                    serde_json::Value::String((param.text).to_string());
+            }
+            let response = reqwest
+                .put(url)
+                .header("Cookie", cookie)
+                .json(&data)
+                .send()
+                .unwrap();
+        } else if let Some(SelectedLayout::Tops) = self.currently_creating {
+            let url = format!("{}api/topmanager/sitzung/{}/top/", URL, self.sitzung.id);
+            let reqwest = reqwest::blocking::Client::new();
+            let mut data = serde_json::json!({});
+            for param in &self.edit_buffer.items {
+                data[param.titel.clone().to_lowercase()] =
+                    serde_json::Value::String((param.text).to_string());
+            }
+            let response = reqwest
+                .put(url)
+                .header("Cookie", cookie)
+                .json(&data)
+                .send()
+                .unwrap();
+        } else if let Some(SelectedLayout::Anträge) = self.currently_creating {
+            let url = format!("{}api/topmanager/top/{}/antrag/", URL, self.top.id);
+            let reqwest = reqwest::blocking::Client::new();
+            let mut data = serde_json::json!({});
+            for param in &self.edit_buffer.items {
+                data[param.titel.clone().to_lowercase()] =
+                    serde_json::Value::String((param.text).to_string());
+            }
+
+            let response = reqwest
+                .put(url)
+                .header("Cookie", cookie)
+                .json(&data)
+                .send()
+                .unwrap();
+        }
+    }
+
+    fn update(&mut self) {
+        let value = self.current_text_area.lines().concat();
+        self.edit_buffer.items[self.edit_buffer.state.selected().unwrap()].text = value;
+    }
 }
 
-impl App {
+impl App<'_> {
     fn run(&mut self, mut terminal: Terminal<impl Backend>) -> io::Result<()> {
         loop {
             self.draw(&mut terminal)?;
-
-            if self.currently_editing.is_some() {
-                if let Some(SelectedLayout::Sitzungen) = self.currently_editing {
-                    //edit sitzung
-                    self.handle_edit(&mut terminal)?;
-                } else if let Some(SelectedLayout::Tops) = self.currently_editing {
-                    //edit top
-                    self.handle_edit(&mut terminal)?;
-                } else if let Some(SelectedLayout::Anträge) = self.currently_editing {
-                    //edit antrag
-                    self.handle_edit(&mut terminal)?;
-                }
-            } else if self.currently_creating.is_some() {
-                if let Some(SelectedLayout::Sitzungen) = self.currently_creating {
-                    //edit sitzung
-                    self.handle_edit(&mut terminal)?;
-                } else if let Some(SelectedLayout::Tops) = self.currently_creating {
-                    //edit top
-                    self.handle_edit(&mut terminal)?;
-                } else if let Some(SelectedLayout::Anträge) = self.currently_creating {
-                    //edit antrag
-                    self.handle_edit(&mut terminal)?;
-                }
-            } else if let SelectedLayout::Sitzungen = self.layout {
-                self.handle_sitzungen(&mut terminal)?;
-            } else if let SelectedLayout::Tops = self.layout {
-                self.handle_tops(&mut terminal)?;
+            if self.edit_param_pop.is_some() {
+                self.handle_text_area()?;
             } else {
-                self.handle_anträge(&mut terminal)?;
+                if self.currently_editing.is_some() {
+                    if let Some(SelectedLayout::Sitzungen) = self.currently_editing {
+                        //edit sitzung
+                        self.handle_edit(&mut terminal)?;
+                    } else if let Some(SelectedLayout::Tops) = self.currently_editing {
+                        //edit top
+                        self.handle_edit(&mut terminal)?;
+                    } else if let Some(SelectedLayout::Anträge) = self.currently_editing {
+                        //edit antrag
+                        self.handle_edit(&mut terminal)?;
+                    }
+                } else if self.currently_creating.is_some() {
+                    if let Some(SelectedLayout::Sitzungen) = self.currently_creating {
+                        //edit sitzung
+                        self.handle_edit(&mut terminal)?;
+                    } else if let Some(SelectedLayout::Tops) = self.currently_creating {
+                        //edit top
+                        self.handle_edit(&mut terminal)?;
+                    } else if let Some(SelectedLayout::Anträge) = self.currently_creating {
+                        //edit antrag
+                        self.handle_edit(&mut terminal)?;
+                    }
+                } else if let SelectedLayout::Sitzungen = self.layout {
+                    self.handle_sitzungen(&mut terminal)?;
+                } else if let SelectedLayout::Tops = self.layout {
+                    self.handle_tops(&mut terminal)?;
+                } else {
+                    self.handle_anträge(&mut terminal)?;
+                }
             }
         }
     }
@@ -323,6 +538,23 @@ impl App {
         Ok(())
     }
 
+    fn handle_text_area(&mut self) -> io::Result<()> {
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.update();
+                        self.edit_param_pop = None;
+                    }
+                    _ => {
+                        self.current_text_area.input(key);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn handle_sitzungen(&mut self, terminal: &mut Terminal<impl Backend>) -> io::Result<()> {
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
@@ -335,6 +567,7 @@ impl App {
                     Char('o') => self.open_sitzung(),
                     Char('e') => self.edit_sitzung(),
                     Char('p') => self.create_sitzung(),
+                    Char('d') => self.delete_sitzung(),
                     _ => {}
                 }
             }
@@ -354,6 +587,7 @@ impl App {
                     Char('o') => self.open_top(),
                     Char('e') => self.edit_top(),
                     Char('p') => self.create_top(),
+                    Char('d') => self.delete_top(),
                     _ => {}
                 }
             }
@@ -372,6 +606,7 @@ impl App {
                     Char('k') | Up => self.anträge_selected_top.previous(),
                     Char('e') => self.edit_antag(),
                     Char('p') => self.create_antrag(),
+                    Char('d') => self.delete_antrag(),
                     _ => {}
                 }
             }
@@ -384,17 +619,22 @@ impl App {
     }
 
     fn exit_edit(&mut self) {
-        self.edit_buffer = StatefulList::with_items(vec![]);
         if let Some(editing) = &self.currently_editing {
+            self.patch();
             self.currently_editing = None;
         }
         if let Some(creating) = &self.currently_creating {
+            self.put();
             self.currently_creating = None;
         }
+        self.sitzungen = StatefulList::with_items(get_sitzungen());
+        self.tops_selected_sitzung = StatefulList::with_items(get_tops(self.sitzung.clone()));
+        self.anträge_selected_top = StatefulList::with_items(get_anträge(self.top.clone()));
+        self.edit_buffer = StatefulList::with_items(vec![]);
     }
 }
 
-impl Widget for &mut App {
+impl Widget for &mut App<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let vertical = Layout::vertical([
             Constraint::Length(2),
@@ -404,7 +644,9 @@ impl Widget for &mut App {
         let [header_area, rest_area, footer_area] = vertical.areas(area);
 
         render_title(header_area, buf);
-        if let Some(editing) = &self.currently_editing {
+        if let Some(editing) = &self.edit_param_pop {
+            self.render_edit_param(rest_area, buf);
+        } else if let Some(editing) = &self.currently_editing {
             self.render_edit(rest_area, buf);
         } else if let Some(creating) = &self.currently_creating {
             self.render_edit(rest_area, buf);
@@ -415,7 +657,7 @@ impl Widget for &mut App {
     }
 }
 
-impl App {
+impl App<'_> {
     fn render_overview(&mut self, area: Rect, buf: &mut Buffer) {
         let title = match self.layout {
             SelectedLayout::Sitzungen => "Sitzungen",
@@ -572,6 +814,27 @@ impl App {
             StatefulWidget::render(items, inner_area, buf, &mut self.edit_buffer.state);
         }
     }
+
+    fn render_edit_param(&mut self, area: Rect, buf: &mut Buffer) {
+        let popup_layout = centered_rect(50, 50, area);
+        let popup = Block::default()
+            .title("Edit Value")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(TEXT_COLOR))
+            .title_style(Style::default().fg(TEXT_COLOR))
+            .style(Style::default().bg(NORMAL_ROW_COLOR).fg(TEXT_COLOR));
+        let param = self.edit_param_pop.as_ref().unwrap();
+        let tile = &param.titel;
+        let text = &param.text;
+        self.current_text_area.set_placeholder_text(text);
+        self.current_text_area
+            .set_block(Block::default().title(tile.clone()));
+        self.current_text_area
+            .widget()
+            .render(popup_layout.inner(&Margin::new(2, 2)), buf);
+        popup.render(popup_layout, buf);
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -602,7 +865,7 @@ fn render_title(area: Rect, buf: &mut Buffer) {
 }
 
 fn render_footer(area: Rect, buf: &mut Buffer) {
-    Paragraph::new("\nUse ↓↑ to move, o to open, p to create a new entry, e to edit and q to exit")
+    Paragraph::new("\nUse ↓↑ to move, o to open, p to create a new entry, e to edit and q/ESC to exit, d to delete")
         .centered()
         .render(area, buf);
 }
