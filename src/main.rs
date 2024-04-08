@@ -443,7 +443,6 @@ impl<'a> App<'_> {
                 .json(&data)
                 .send()
                 .unwrap();
-            println!("{:?}", response);
         } else if let Some(SelectedLayout::Tops) = self.currently_creating {
             let url = format!("{}api/topmanager/sitzung/{}/top/", URL, self.sitzung.id);
             let reqwest = reqwest::blocking::Client::new();
