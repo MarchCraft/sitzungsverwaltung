@@ -359,6 +359,7 @@ impl<'a> App<'_> {
         self.edit_param_pop = Some(param);
         let param = self.edit_param_pop.as_ref().unwrap();
         let text = &param.text;
+        self.current_text_area = TextArea::default();
         self.current_text_area.insert_str(text);
     }
 
@@ -371,7 +372,7 @@ impl<'a> App<'_> {
         let cookie = format!("access_token={}", token);
 
         if let Some(SelectedLayout::Sitzungen) = self.currently_editing {
-            let sitzung = self.sitzungen.items[self.sitzungen.state.selected().unwrap()].clone();
+            let sitzung = &self.sitzung;
             let url = format!("{}api/topmanager/sitzung/", URL);
             let reqwest = reqwest::blocking::Client::new();
             let mut data = serde_json::json!({});
@@ -387,7 +388,7 @@ impl<'a> App<'_> {
                 .send()
                 .unwrap();
         } else if let Some(SelectedLayout::Tops) = self.currently_editing {
-            let sitzung = self.sitzungen.items[self.sitzungen.state.selected().unwrap()].clone();
+            let sitzung = &self.sitzung;
             let selected = self.tops_selected_sitzung.state.selected().unwrap();
             let top = self.tops_selected_sitzung.items[selected].clone();
             let url = format!("{}api/topmanager/top/", URL);
