@@ -23,7 +23,7 @@ const TODO_HEADER_BG: Color = tailwind::BLUE.c950;
 const NORMAL_ROW_COLOR: Color = tailwind::SLATE.c950;
 const SELECTED_STYLE_FG: Color = tailwind::BLUE.c300;
 const TEXT_COLOR: Color = tailwind::SLATE.c200;
-const URL: &str = "http://localhost:8080/";
+const URL: &str = "https://new.hhu-fscs.de/";
 
 mod keycloak;
 
@@ -56,7 +56,7 @@ struct Top {
     weight: i32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct Antrag {
     id: Uuid,
     titel: String,
@@ -107,6 +107,7 @@ struct App<'a> {
     sitzung: Sitzung,
     top: Top,
     token: String,
+    antrag: Antrag,
 }
 
 #[tokio::main]
@@ -165,6 +166,7 @@ impl<'a> App<'_> {
             sitzung: Sitzung::default(),
             top: Top::default(),
             token: keycloak::get_token().await.unwrap(),
+            antrag: Antrag::default(),
         }
     }
 
@@ -267,6 +269,7 @@ impl<'a> App<'_> {
         let reqwest = reqwest::blocking::Client::new();
         let response = reqwest.get(url).send().unwrap();
         let antrag: Antrag = response.json().unwrap();
+        self.antrag = antrag.clone();
         self.edit_buffer.items.push(Param {
             titel: "Titel".to_string(),
             text: antrag.titel,
@@ -354,6 +357,9 @@ impl<'a> App<'_> {
         let selected = self.edit_buffer.state.selected().unwrap();
         let param = self.edit_buffer.items[selected].clone();
         self.edit_param_pop = Some(param);
+        let param = self.edit_param_pop.as_ref().unwrap();
+        let text = &param.text;
+        self.current_text_area.insert_str(text);
     }
 
     fn exit_app(&self) {
@@ -400,9 +406,7 @@ impl<'a> App<'_> {
                 .send()
                 .unwrap();
         } else if let Some(SelectedLayout::Anträge) = self.currently_editing {
-            let antrag = self.anträge_selected_top.items
-                [self.anträge_selected_top.last_selected.unwrap()]
-            .clone();
+            let antrag = &self.antrag;
             let url = format!("{}api/topmanager/antrag/", URL);
             let reqwest = reqwest::blocking::Client::new();
             let mut data = serde_json::json!({});
@@ -438,6 +442,7 @@ impl<'a> App<'_> {
                 .json(&data)
                 .send()
                 .unwrap();
+            println!("{:?}", response);
         } else if let Some(SelectedLayout::Tops) = self.currently_creating {
             let url = format!("{}api/topmanager/sitzung/{}/top/", URL, self.sitzung.id);
             let reqwest = reqwest::blocking::Client::new();
@@ -827,7 +832,6 @@ impl App<'_> {
         let param = self.edit_param_pop.as_ref().unwrap();
         let tile = &param.titel;
         let text = &param.text;
-        self.current_text_area.set_placeholder_text(text);
         self.current_text_area
             .set_block(Block::default().title(tile.clone()));
         self.current_text_area
