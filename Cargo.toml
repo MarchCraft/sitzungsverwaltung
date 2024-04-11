@@ -10,7 +10,7 @@ uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4.19", features = ["serde"] }
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.68"
-reqwest = { version = "0.12.3", features = ["json", "blocking"] }
+reqwest = { version = "0.12.3", features = ["json", "blocking", "rustls-tls", "http2", "macos-system-configuration", "charset"], default-features = false }
 color-eyre = "0.6.3"
 clippy = { version = "0.0.302", optional = true }
 tui-textarea = "*"
