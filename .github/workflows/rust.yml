@@ -88,16 +88,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v1
 
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          target: aarch64-unknown-linux-gnu
-          default: true
-          override: true
+          targets: aarch64-unknown-linux-gnu
 
-      - name: Build for arm
-        run: cargo build --all --release  --target aarch64-unknown-linux-gnu && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_arm
+      - name: Install compiler tools (as we're cross-compiling)
+        run: sudo apt install -y gcc-aarch64-linux-gnu
+
+      - name: Setup caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release artifact
+        run: cargo build --all --release --target aarch64-unknown-linux-gnu && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_arm
 
       - name: Release
         uses: softprops/action-gh-release@v1
