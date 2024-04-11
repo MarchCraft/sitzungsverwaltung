@@ -97,7 +97,7 @@ jobs:
           override: true
 
       - name: Build for arm
-        run: cargo build --all --release && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_arm
+        run: cargo build --all --release  --target aarch64-unknown-linux-gnu && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_arm
 
       - name: Release
         uses: softprops/action-gh-release@v1
