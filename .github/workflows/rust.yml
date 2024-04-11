@@ -1,47 +1,61 @@
 name: Rust
 
 on: [push]
-
+            
 jobs:
   build:
+    name: ${{ matrix.platform.os_name }} with rust ${{ matrix.toolchain }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - os: ubuntu-latest
-            target: unknown-linux-gnu
+            target: x86_64-unknown-linux-gnu
+            bin: sitzungsverwaltung-linux-amd64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            bin: sitzungsverwaltung-linux-amd64
+
           - os: windows-latest
-            target: pc-windows-msvc
+            target: x86_64-pc-windows-msvc
+            bin: sitzungsverwaltung-amd64.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            bin: sitzungsverwaltung-aarch64.exe
+
           - os: macos-latest
-            target: apple-darwin
-        arch: [x86_64, aarch64]
-    runs-on: ${{ matrix.platform.os }}
-    name: Build - ${{ matrix.arch }}-${{ matrix.platform.target }}
+            target: x86_64-apple-darwin
+            bin: sitzungsverwaltung-darwin-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: sitzungsverwaltung-darwin-aarch64
+        toolchain:
+          - stable
     steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v3
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@v0
         with:
-          target: ${{ matrix.arch}}-${{ matrix.platform.target }}
-          toolchain: stable
-          default: true
-          override: true
-
-      - name: Build
-        run: |
-          cargo build --all --release --target ${{ matrix.arch }}-${{ matrix.platform.target }}
-          strip target/release/sitzungsverwaltung
-          mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung-${{ matrix.platform.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: "aarch64-linux-gnu-gcc"
-
-      - name: Release
+          command: "build"
+          target: ${{ matrix.platform.target }}
+          toolchain: ${{ matrix.toolchain }}
+          args: "--locked --release"
+          strip: true
+      - name: Rename binary (linux and macos)
+        run: mv target/${{ matrix.platform.target }}/release/sitzungsverwaltung target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }}
+        if: matrix.platform.os != 'windows-latest'
+          
+      - name: Rename binary (windows)
+        run: mv target/${{ matrix.platform.target }}/release/figctl.exe target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }}
+        if: matrix.platform.os == 'windows-latest'
+          
+      - name: Release 
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/sitzungsverwaltung-${{ matrix.platform.target }}
+            target/${{ matrix.platform.target }}/release/${{ matrix.platform.bin }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
