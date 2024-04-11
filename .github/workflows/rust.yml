@@ -27,7 +27,7 @@ jobs:
           files: |
             target/release/sitzungsverwaltung_amd64
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   build-win:
     runs-on: windows-latest
@@ -52,7 +52,7 @@ jobs:
         with:
           files: target/release/sitzungsverwaltung.exe
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   build-mac:
     runs-on: macos-latest
@@ -79,5 +79,5 @@ jobs:
           files: |
             target/release/sitzungsverwaltung_darwin
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
