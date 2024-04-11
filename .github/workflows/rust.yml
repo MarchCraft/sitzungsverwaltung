@@ -4,8 +4,18 @@ on: [push]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    name: Build - ${{ matrix.target }}
+    strategy:
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: unknown-linux-gnu
+          - os: windows-latest
+            target: pc-windows-msvc
+          - os: macos-latest
+            target: apple-darwin
+        arch: [x86_64, aarch64]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v1
@@ -18,91 +28,10 @@ jobs:
           override: true
 
       - name: Build
-        run: cargo build --all --release && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_amd64
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: |
-            target/release/sitzungsverwaltung_amd64
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-  build-win:
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          default: true
-          override: true
-
-      - name: Build
-        run: cargo build --all --release
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: target/release/sitzungsverwaltung.exe
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-  build-mac:
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install latest rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: x86_64-apple-darwin
-          default: true
-          override: true
-
-      - name: Build for mac
-        run: cargo build --all --release && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_darwin
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: |
-            target/release/sitzungsverwaltung_darwin
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-  build-arm:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v1
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: aarch64-unknown-linux-gnu
-
-      - name: Install compiler tools (as we're cross-compiling)
-        run: sudo apt install -y gcc-aarch64-linux-gnu pkg-config libssl-dev
-
-      - name: Setup caching
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release artifact
-        # run: cargo build --all --release --target aarch64-unknown-linux-gnu && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_arm
-        run: cargo build --all --release --target aarch64-unknown-linux-gnu && ls target
+        run: |
+          cargo build --all --release --target ${{ matrix.target }}
+          strip target/release/sitzungsverwaltung
+          mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung-${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: "aarch64-linux-gnu-gcc"
 
@@ -111,6 +40,119 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/sitzungsverwaltung_arm
+            target/release/sitzungsverwaltung-${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v1
+
+#       - name: Install latest rust toolchain
+#         uses: actions-rs/toolchain@v1
+#         with:
+#           toolchain: stable
+#           default: true
+#           override: true
+
+#       - name: Build
+#         run: cargo build --all --release && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_amd64
+
+#       - name: Release
+#         uses: softprops/action-gh-release@v1
+#         if: startsWith(github.ref, 'refs/tags/')
+#         with:
+#           files: |
+#             target/release/sitzungsverwaltung_amd64
+#         env:
+#           GITHUB_TOKEN: ${{ github.token }}
+
+#   build-win:
+#     runs-on: windows-latest
+
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v1
+
+#       - name: Install latest rust toolchain
+#         uses: actions-rs/toolchain@v1
+#         with:
+#           toolchain: stable
+#           default: true
+#           override: true
+
+#       - name: Build
+#         run: cargo build --all --release
+
+#       - name: Release
+#         uses: softprops/action-gh-release@v1
+#         if: startsWith(github.ref, 'refs/tags/')
+#         with:
+#           files: target/release/sitzungsverwaltung.exe
+#         env:
+#           GITHUB_TOKEN: ${{ github.token }}
+
+#   build-mac:
+#     runs-on: macos-latest
+
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v1
+
+#       - name: Install latest rust toolchain
+#         uses: actions-rs/toolchain@v1
+#         with:
+#           toolchain: stable
+#           target: x86_64-apple-darwin
+#           default: true
+#           override: true
+
+#       - name: Build for mac
+#         run: cargo build --all --release && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_darwin
+
+#       - name: Release
+#         uses: softprops/action-gh-release@v1
+#         if: startsWith(github.ref, 'refs/tags/')
+#         with:
+#           files: |
+#             target/release/sitzungsverwaltung_darwin
+#         env:
+#           GITHUB_TOKEN: ${{ github.token }}
+
+#   build-arm:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v1
+
+#       - name: Install Rust Toolchain
+#         uses: dtolnay/rust-toolchain@stable
+#         with:
+#           toolchain: stable
+#           targets: aarch64-unknown-linux-gnu
+
+#       - name: Install compiler tools (as we're cross-compiling)
+#         run: sudo apt install -y gcc-aarch64-linux-gnu pkg-config libssl-dev
+
+#       - name: Setup caching
+#         uses: Swatinem/rust-cache@v2
+
+#       - name: Build release artifact
+#         # run: cargo build --all --release --target aarch64-unknown-linux-gnu && strip target/release/sitzungsverwaltung && mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung_arm
+#         run: cargo build --all --release --target aarch64-unknown-linux-gnu && ls target
+        # env:
+        #   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: "aarch64-linux-gnu-gcc"
+
+#       - name: Release
+#         uses: softprops/action-gh-release@v1
+#         if: startsWith(github.ref, 'refs/tags/')
+#         with:
+#           files: |
+#             target/release/sitzungsverwaltung_arm
+#         env:
+#           GITHUB_TOKEN: ${{ github.token }}
