@@ -29,7 +29,7 @@ jobs:
 
       - name: Build
         run: |
-          cargo build --all --release --target ${{ matrix.target }}
+          cargo build --all --release --target ${{ arch }}-${{ matrix.target }}
           strip target/release/sitzungsverwaltung
           mv target/release/sitzungsverwaltung target/release/sitzungsverwaltung-${{ matrix.target }}
         env:
